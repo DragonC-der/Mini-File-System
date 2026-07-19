@@ -45,6 +45,8 @@ git clone https://github.com/DragonC-der/Mini-File-System
 cd mini-file-system
 make          # builds the `minifs` binary
 ./minifs      # launches the CLI, creates disk.img if none exists
+# If 'make' does not work , run build.sh script
+./build.sh    # creates disk,img if none exists or, open existing one
 ```
 
 ```
