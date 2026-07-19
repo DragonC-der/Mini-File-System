@@ -41,7 +41,7 @@ Most "build your own file system" portfolio projects simulate everything in memo
 Requires a C++17 compiler (g++ or clang++).
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/DragonC-der/Mini-File-System
 cd mini-file-system
 make          # builds the `minifs` binary
 ./minifs      # launches the CLI, creates disk.img if none exists
