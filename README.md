@@ -171,6 +171,7 @@ mini-file-system/
 │   ├── fs_ops.cpp        # user-facing commands (mkdir, cat, rm, etc.)
 │   └── main.cpp           # CLI loop
 ├── Makefile
+├── build.sh               # if make command doesn't work
 └── README.md
 ```
 
