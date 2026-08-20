@@ -36,6 +36,25 @@ bool FileSystem::cd(const std::string& name) {
     return true;
 }
 
+int FileSystem::getDirSize(int dirInode) const {
+    std::vector<DirEntry> entries;
+    listEntries(dirInode, entries);
+
+    int totalSize = 0;
+    for (const auto& e : entries) {
+        std::string n = e.name;
+        if (n == "." || n == "..") continue;
+
+        Inode inode = readInode(e.inode_num);
+        if (inode.mode == MODE_DIR) {
+            totalSize += getDirSize(e.inode_num);
+        } else {
+            totalSize += inode.size;
+        }
+    }
+    return totalSize;
+}
+
 void FileSystem::ls() const {
     std::vector<DirEntry> entries;
     listEntries(currentInode(), entries);
@@ -44,8 +63,9 @@ void FileSystem::ls() const {
         std::string n = e.name;
         if (n == "." || n == "..") continue;
         Inode inode = readInode(e.inode_num);
+        int displaySize = (inode.mode == MODE_DIR) ? getDirSize(e.inode_num) : inode.size;
         std::cout << (inode.mode == MODE_DIR ? "d " : "- ")
-                   << std::setw(6) << inode.size << "  "
+                   << std::setw(6) << displaySize << "  "
                    << n << (inode.mode == MODE_DIR ? "/" : "") << "\n";
     }
 }
@@ -160,7 +180,8 @@ bool FileSystem::stat(const std::string& name) const {
     std::cout << "Name:   " << name << "\n";
     std::cout << "Inode:  " << idx << "\n";
     std::cout << "Type:   " << (inode.mode == MODE_DIR ? "directory" : "file") << "\n";
-    std::cout << "Size:   " << inode.size << " bytes\n";
+    int displaySize = (inode.mode == MODE_DIR) ? getDirSize(idx) : inode.size;
+    std::cout << "Size:   " << displaySize << " bytes\n";
     std::cout << "Blocks: " << blocksUsed << " (" << blocksUsed * BLOCK_SIZE << " bytes)\n";
     return true;
 }
