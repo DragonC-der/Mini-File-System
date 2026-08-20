@@ -1,126 +1,170 @@
-<div align="center">
-
 # Mini File System
 
-**A Unix-style file system built from scratch in C++** — block storage, inodes, free-space bitmaps, and directory structures, all persisted to a single flat file acting as a virtual disk, with an interactive CLI.
+A small Unix-style file system implemented from scratch in **C++17**. It uses a single file as a virtual disk and implements its own block allocation, inode management, directory entries, file I/O, and command-line interface.
 
-![C++](https://img.shields.io/badge/C%2B%2B-17-blue?logo=cplusplus)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-blue?logo=cplusplus)
 ![Build](https://img.shields.io/badge/build-Make-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
-</div>
+## Overview
 
----
+The goal of this project is to understand what happens underneath high-level file operations such as `open`, `read`, `write`, and `mkdir`.
 
-## Table of Contents
+Instead of using the host operating system's normal directory structure for the file system itself, the project stores its own metadata and file contents inside a **10 MB virtual disk image** (`disk.img`). The file system can then be closed and mounted again without losing its state.
 
-- [Why this project](#why-this-project)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [Example Session](#example-session)
-- [Command Reference](#command-reference)
-- [Known Limitations](#known-limitations)
-- [Possible Extensions](#possible-extensions)
-- [Project Structure](#project-structure)
-
-## Why this project
-
-Most "build your own file system" portfolio projects simulate everything in memory. This one doesn't — it implements the actual on-disk structures real file systems use (ext2-style inodes with direct + indirect block pointers, bitmap-based free space tracking, directories as regular files containing name→inode mappings) and persists every operation immediately to a real file on disk, so state survives a process restart with no separate "save" step.
+The design is inspired by classic Unix/ext2-style concepts, while remaining intentionally small enough to understand and experiment with.
 
 ## Features
 
-- 📁 Nested directories, implemented as regular files containing `(name, inode)` entries
-- 💾 Files up to ~71.5 KB via 12 direct block pointers + 1 single-indirect pointer (ext2-style addressing)
-- 🗺️ Bitmap-based free space tracking for both blocks and inodes
-- 🔒 Full persistence — close the CLI, reopen it, everything is still there
-- 🖥️ Interactive CLI — `mkdir`, `cd`, `ls`, `tree`, `touch`, `write`, `append`, `cat`, `rm`, `rmdir`, `stat`, `df`, `pwd`
+- **Persistent virtual disk** backed by a single `.img` file
+- **Superblock** containing file-system layout information
+- **Inode table** for files and directories
+- **Separate inode and block bitmaps** for allocation tracking
+- **12 direct block pointers + 1 single-indirect pointer** per inode
+- **Hierarchical directories** represented by directory-entry records (`name -> inode number`)
+- File creation, overwrite, append, read, and deletion
+- Directory creation, removal, navigation, and listing
+- Recursive directory-size calculation used by both `ls` and `stat`
+- Disk usage reporting with `df`
+- Interactive shell-like command-line interface
 
-## Quick Start
+## File-System Layout
 
-Requires a C++17 compiler (g++ or clang++).
+The virtual disk is divided into metadata and data regions:
 
-```bash
-git clone https://github.com/DragonC-der/Mini-File-System
-cd mini-file-system
-make          # builds the `minifs` binary
-./minifs      # launches the CLI, creates disk.img if none exists
-# If 'make' does not work , run build.sh script
-./build.sh    # creates disk,img if none exists or, open existing one
+```text
++-----------------------+
+| Superblock            |
++-----------------------+
+| Inode bitmap          |
++-----------------------+
+| Block bitmap          |
++-----------------------+
+| Inode table           |
++-----------------------+
+| Data blocks           |
+| - file contents       |
+| - directory entries   |
+| - indirect pointers   |
++-----------------------+
 ```
 
-```
-minifs:/$ mkdir projects
-minifs:/$ cd projects
-minifs:/projects$ write notes.txt Hello, file system!
-minifs:/projects$ cat notes.txt
-Hello, file system!
-```
+The current configuration is:
 
-Or point it at a custom disk image:
-```bash
-./minifs mydisk.img
-```
+| Property | Value |
+|---|---:|
+| Virtual disk size | 10 MB |
+| Block size | 512 bytes |
+| Total blocks | 20,480 |
+| Maximum inodes | 1,024 |
+| Direct pointers per inode | 12 |
+| Pointers in one indirect block | 128 |
+| Maximum file data size | about 71.5 KB |
 
-## Architecture
+## Inodes and Direct/Indirect Blocks
 
-```
-Block 0                     → Superblock
-Block 1                     → Inode bitmap
-Blocks 2..N                 → Block bitmap
-Blocks N+1..M                → Inode table (128-byte inodes)
-Blocks M+1..end              → Data blocks (file contents / directory entries)
-```
-
-**The inode** is the core abstraction — it stores type, size, and block pointers, but deliberately *not* a filename:
+Each file or directory is represented by an inode. The inode stores metadata such as type, size, and block pointers; the filename is stored in its parent directory entry rather than inside the inode.
 
 ```cpp
 struct Inode {
-    int mode;              // FREE / FILE / DIR
-    int size;               // bytes
-    int direct[12];          // direct data block pointers
-    int indirect;            // pointer to a block of 128 more pointers
+    int mode;
+    int size;
+    int direct[12];
+    int indirect;
     int used;
 };
 ```
 
-The name lives in the *parent directory's* entry instead, pointing at an inode number — that separation is what makes the directory-as-a-file design work below, and architecturally is what real hard links are built on.
+For larger files, the `indirect` pointer references a block containing additional data-block addresses.
 
-**A directory** is just a file whose data blocks are packed with `DirEntry { name, inode_num }` records — the same mechanism real file systems like ext2 use. `ls` and `cat` end up reading data the same underlying way; only the interpretation differs.
+This is a simplified design: there is currently **no double-indirect addressing**, which is why the maximum file size is limited.
 
-## Example Session
+## Directory Representation
 
+Directories are stored using the same underlying block mechanism as files, but their data is interpreted as directory entries:
+
+```text
+name -> inode number
 ```
+
+Each directory also contains `.` and `..` entries. Commands such as `ls`, `cd`, `mkdir`, and `rmdir` operate on these entries and the associated inodes.
+
+## Directory Size
+
+Directory size displayed by `ls` and `stat` is the **logical total size of files contained in the directory recursively**.
+
+For example:
+
+```text
+/docs
+  notes.txt       100 bytes
+  /code
+    main.cpp      250 bytes
+```
+
+then the displayed size of `/docs` is:
+
+```text
+100 + 250 = 350 bytes
+```
+
+This is separate from the number of blocks physically allocated to the directory inode itself; `stat` continues to report allocated blocks independently.
+
+## Getting Started
+
+### Requirements
+
+- C++17-compatible compiler (`g++` or `clang++`)
+- `make`
+
+### Build
+
+```bash
+git clone https://github.com/DragonC-der/Mini-File-System
+cd Mini-File-System
+make
+```
+
+An alternative build script is also provided:
+
+```bash
+./build.sh
+```
+
+### Run
+
+```bash
+./minifs
+```
+
+If no disk image exists, the program formats a new one. If an existing image is supplied, it mounts that file system.
+
+```bash
+./minifs mydisk.img
+```
+
+## Example
+
+```text
 minifs:/$ mkdir projects
 minifs:/$ cd projects
-minifs:/projects$ mkdir mini-fs
-minifs:/projects$ cd mini-fs
-minifs:/projects/mini-fs$ touch notes.txt
-minifs:/projects/mini-fs$ write notes.txt Hello from the mini file system!
-minifs:/projects/mini-fs$ cat notes.txt
-Hello from the mini file system!
-minifs:/projects/mini-fs$ stat notes.txt
-Name:   notes.txt
+minifs:/projects$ mkdir code
+minifs:/projects$ write notes.txt Hello, file system!
+minifs:/projects$ cd code
+minifs:/projects/code$ write main.cpp int main() {}
+minifs:/projects/code$ cd ..
+minifs:/projects$ ls
+d      13  code/
+-      19  notes.txt
+minifs:/projects$ stat code
+Name:   code
 Inode:  3
-Type:   file
-Size:   33 bytes
+Type:   directory
+Size:   13 bytes
 Blocks: 1 (512 bytes)
-minifs:/projects/mini-fs$ cd /
-minifs:/$ tree
-/
-`-- projects/
-    `-- mini-fs/
-        `-- notes.txt
-minifs:/$ df
-Disk size:    10240 KB
-Block size:   512 bytes
-Blocks:       4 / 20345 used
-Inodes:       4 / 1024 used
-Free space:   10170 KB
-minifs:/$ exit
 ```
 
-Exit and relaunch `./minifs` — everything above is still there, because it's read from `disk.img` on disk, not held in memory.
+The state is persisted in the disk image, so closing and reopening the program preserves the file system contents.
 
 ## Command Reference
 
@@ -128,57 +172,103 @@ Exit and relaunch `./minifs` — everything above is still there, because it's r
 |---|---|
 | `mkdir <name>` | Create a directory |
 | `rmdir <name>` | Remove an empty directory |
-| `cd <name> / cd ..` | Change directory |
-| `ls` | List current directory contents |
-| `tree` | Show the full directory tree |
-| `pwd` | Print current path |
+| `cd <name>` | Enter a directory |
+| `cd ..` | Move to the parent directory |
+| `pwd` | Print the current path |
+| `ls` | List entries and their logical sizes |
+| `tree` | Display the directory tree |
 | `touch <name>` | Create an empty file |
-| `write <name> <text>` | Overwrite a file's contents |
-| `append <name> <text>` | Append text to a file |
+| `write <name> <text>` | Create/overwrite a file |
+| `append <name> <text>` | Append to a file |
 | `cat <name>` | Print file contents |
-| `rm <name>` | Delete a file |
-| `stat <name>` | Show inode metadata for a file/dir |
-| `df` | Show disk usage summary |
+| `rm <name>` | Remove a file |
+| `stat <name>` | Display inode and size/block metadata |
+| `df` | Display file-system disk usage |
+| `exit` | Exit the CLI |
 
-## Known Limitations
+## Architecture
 
-Named directly rather than left for someone else to discover:
-
-- **Max file size is bounded** by 12 direct blocks + 1 indirect block of 128 pointers (~71.5 KB with 512-byte blocks). A double-indirect pointer would remove this cap.
-- **A directory can hold at most 12 blocks worth of entries** — no indirect block for directories currently. Fine for demo purposes, a real limitation worth calling out.
-- **Single-user, single-process** — no concurrency control or locking.
-- **No journaling** — a crash mid-write can leave a bitmap/inode inconsistency.
-
-## Possible Extensions
-
-- Journaling / write-ahead log for crash consistency
-- Double-indirect block pointers for larger files
-- File permissions and timestamps
-- Symbolic links
-- A defragmentation tool
-
-## Project Structure
-
+```text
+                  +----------------+
+                  |    main.cpp    |
+                  |   CLI / REPL   |
+                  +--------+-------+
+                           |
+                  +--------v-------+
+                  |    fs_ops.cpp  |
+                  | user operations |
+                  +--------+-------+
+                           |
+          +----------------+----------------+
+          |                |                |
+   +------v------+   +-----v------+   +-----v------+
+   | fs_dir.cpp  |   | fs_data.cpp|   | fs_core.cpp|
+   | directories |   | file data  |   | metadata /  |
+   | & entries   |   | read/write |   | allocation |
+   +------+------+
+          |                |                |
+          +----------------+----------------+
+                           |
+                    +------v------+
+                    |  disk.cpp   |
+                    | block I/O   |
+                    +------+------+
+                           |
+                     disk.img file
 ```
-mini-file-system/
+
+### Source files
+
+```text
+Mini-File-System-main/
 ├── include/
-│   └── fs.h            # struct definitions & class declarations
+│   └── fs.h              # data structures and FileSystem declarations
 ├── src/
 │   ├── disk.cpp          # raw block-level disk I/O
-│   ├── fs_core.cpp       # format/mount, bitmaps, inode alloc
-│   ├── fs_dir.cpp        # directory entry management
-│   ├── fs_data.cpp       # file data read/write (direct + indirect blocks)
-│   ├── fs_ops.cpp        # user-facing commands (mkdir, cat, rm, etc.)
-│   └── main.cpp           # CLI loop
+│   ├── fs_core.cpp       # format/mount, bitmaps, inode allocation
+│   ├── fs_dir.cpp        # directory entry operations
+│   ├── fs_data.cpp       # file data read/write and block management
+│   ├── fs_ops.cpp        # user-facing file-system commands
+│   └── main.cpp          # interactive CLI
 ├── Makefile
-├── build.sh               # if make command doesn't work
+├── build.sh
 └── README.md
 ```
 
----
+## Limitations
 
-<div align="center">
+This project is intentionally small and educational. The following features are not implemented:
 
-Built as a from-scratch exploration of what's actually happening below `open()`, `read()`, and `write()`.
+- No journaling or crash-recovery mechanism
+- No concurrency control or multi-user support
+- No file permissions/ownership model
+- No timestamps
+- No symbolic links
+- No double- or triple-indirect block addressing
+- Directory growth is limited by the current directory data-block implementation
 
-</div>
+A crash in the middle of an update can therefore leave on-disk metadata inconsistent.
+
+## Possible Extensions
+
+- Add journaling or a write-ahead log
+- Add double-indirect block pointers
+- Add file permissions and timestamps
+- Add symbolic links
+- Add automated tests for mount/format, allocation, file operations, and recovery scenarios
+- Add integrity-check and file-system consistency utilities
+
+## What This Project Demonstrates
+
+This project is primarily an exploration of **operating-system and file-system fundamentals**:
+
+- block-based storage
+- inodes
+- bitmap allocation
+- directory structures
+- direct/indirect addressing
+- persistence
+- file and directory system calls
+- separation between metadata and file names/data
+
+It is not intended to be a production filesystem; the implementation is deliberately compact and focused on understanding the underlying mechanisms.
