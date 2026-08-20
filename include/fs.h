@@ -126,6 +126,7 @@ private:
     void freeInodeData(Inode& inode);
 
     void treeHelper(int dirInode, const std::string& prefix) const;
+    int getDirSize(int dirInode) const;
 
     int currentInode() const { return pathStack.back().second; }
 };
